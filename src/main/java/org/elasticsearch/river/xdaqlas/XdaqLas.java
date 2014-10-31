@@ -5,13 +5,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.Proxy;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.Properties;
 
 import org.json.simple.JSONObject;
 import org.json.simple.JSONArray;
@@ -37,21 +39,33 @@ import org.elasticsearch.common.unit.TimeValue;
 
 public class XdaqLas extends AbstractRiverComponent implements River {
 
-  private final Client client;
-  public String lasURL;
-  private volatile Thread thread;
+  protected final String lasURL;
+  protected final Proxy lasProxy;
   protected volatile BulkProcessor bulkProcessor;
+  private volatile Thread thread;
 
   @SuppressWarnings({"unchecked"})
   @Inject
   public XdaqLas(RiverName riverName, RiverSettings settings, Client client) {
     super(riverName, settings);
-    this.client = client;
 
     //RunRiver Settings
     Map<String, Object> rSettings = settings.settings();
     //lasURL = XContentMapValues.nodeStringValue(rSettings.get("lasURL"), "http://dvsrv-c2f36-09-01.cms:9941/urn:xdaq-application:service=xmaslas2g");
     lasURL = XContentMapValues.nodeStringValue(rSettings.get("lasURL"), "http://pc-c2e11-18-01.cms:9941/urn:xdaq-application:service=xmaslas2g");
+
+    final Boolean useProxy = (Boolean)rSettings.get("useProxyForLAS");
+    if (useProxy != null && useProxy) {
+      final String hostname = XContentMapValues.nodeStringValue(rSettings.get("proxyHost"), "localhost");
+      final Integer port = XContentMapValues.nodeIntegerValue(rSettings.get("proxyPort"), 1080);
+      logger.info("Using SOCKS proxy "+hostname+":"+port);
+      SocketAddress addr = new
+        InetSocketAddress(hostname, port);
+      lasProxy = new Proxy(Proxy.Type.SOCKS, addr);
+    }
+    else {
+      lasProxy = null;
+    }
 
     // Creating bulk processor
     this.bulkProcessor = BulkProcessor.builder(client, new BulkProcessor.Listener() {
@@ -114,11 +128,6 @@ public class XdaqLas extends AbstractRiverComponent implements River {
       this.lasURL = lasURL;
       this.parser = new JSONParser();
       this.dateFormat = new SimpleDateFormat("E, MMM dd yyyy HH:mm:ss z");
-
-      Properties sysProperties = System.getProperties();
-      sysProperties.put("socksProxyHost", "localhost");
-      sysProperties.put("socksProxyPort", "1080");
-      sysProperties.put("proxySet",  "true");
     }
 
     @Override
@@ -139,7 +148,12 @@ public class XdaqLas extends AbstractRiverComponent implements River {
           }
           JSONArray array;
           try {
-            conn = (HttpURLConnection) url.openConnection();
+            if (lasProxy == null) {
+              conn = (HttpURLConnection)url.openConnection();
+            }
+            else {
+              conn = (HttpURLConnection)url.openConnection(lasProxy);
+            }
             in = conn.getInputStream();
             InputStreamReader isr = new InputStreamReader(in);
             BufferedReader reader = new BufferedReader(isr);
