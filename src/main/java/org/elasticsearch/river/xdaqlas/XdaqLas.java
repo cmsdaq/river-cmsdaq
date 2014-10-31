@@ -15,6 +15,8 @@ import java.util.Date;
 import java.util.Iterator;
 import java.util.Map;
 
+import org.apache.commons.lang.exception.ExceptionUtils;
+
 import org.json.simple.JSONObject;
 import org.json.simple.JSONArray;
 import org.json.simple.parser.ParseException;
@@ -51,11 +53,12 @@ public class XdaqLas extends AbstractRiverComponent implements River {
 
     //RunRiver Settings
     Map<String, Object> rSettings = settings.settings();
-    //lasURL = XContentMapValues.nodeStringValue(rSettings.get("lasURL"), "http://dvsrv-c2f36-09-01.cms:9941/urn:xdaq-application:service=xmaslas2g");
-    lasURL = XContentMapValues.nodeStringValue(rSettings.get("lasURL"), "http://pc-c2e11-18-01.cms:9941/urn:xdaq-application:service=xmaslas2g");
+    //lasURL = XContentMapValues.nodeStringValue(rSettings.get("lasURL"), "http://dvsrv-c2f36-09-01.cms:9941");
+    lasURL = XContentMapValues.nodeStringValue(rSettings.get("lasURL"), "http://pc-c2e11-18-01.cms:9941");
 
-    final Boolean useProxy = (Boolean)rSettings.get("useProxyForLAS");
-    if (useProxy != null && useProxy) {
+    // Create SOCKS proxy if requested
+    final Boolean useProxy = XContentMapValues.nodeBooleanValue(rSettings.get("useProxyForLAS"),false);
+    if (useProxy) {
       final String hostname = XContentMapValues.nodeStringValue(rSettings.get("proxyHost"), "localhost");
       final Integer port = XContentMapValues.nodeIntegerValue(rSettings.get("proxyPort"), 1080);
       logger.info("Using SOCKS proxy "+hostname+":"+port);
@@ -120,12 +123,12 @@ public class XdaqLas extends AbstractRiverComponent implements River {
   }
 
   private class Slurper implements Runnable {
-    private final String lasURL;
+    private final String lasURN;
     private final JSONParser parser;
     private final DateFormat dateFormat;
 
     private Slurper(String lasURL) {
-      this.lasURL = lasURL;
+      this.lasURN = lasURL+"/urn:xdaq-application:service=xmaslas2g";
       this.parser = new JSONParser();
       this.dateFormat = new SimpleDateFormat("E, MMM dd yyyy HH:mm:ss z");
     }
@@ -134,19 +137,18 @@ public class XdaqLas extends AbstractRiverComponent implements River {
     public void run() {
       HttpURLConnection conn = null;
       InputStream in = null;
+      URL url = null;
 
       try {
         while(true) {
-          logger.info("Getting data from "+lasURL);
-          URL url = null;
+          logger.info("Getting data from "+lasURN);
           try {
-            url = new URL(lasURL+"/retrieveCollection?flash=urn:xdaq-flashlist:BU&fmt=json");
+            url = new URL( lasURN + "/retrieveCatalog?fmt=plain");
           }
           catch (java.net.MalformedURLException e) {
-            logger.error("Bad LAS URL: "+e.getMessage());
+            logger.error("Bad LAS URL: "+ExceptionUtils.getRootCauseMessage(e));
             continue;
           }
-          JSONArray array;
           try {
             if (lasProxy == null) {
               conn = (HttpURLConnection)url.openConnection();
@@ -157,46 +159,103 @@ public class XdaqLas extends AbstractRiverComponent implements River {
             in = conn.getInputStream();
             InputStreamReader isr = new InputStreamReader(in);
             BufferedReader reader = new BufferedReader(isr);
-            String rawJSON = reader.readLine();
-            JSONObject jsonObject = (JSONObject)this.parser.parse(rawJSON);
-            JSONObject table = (JSONObject)jsonObject.get("table");
-            //System.out.println(table.get("rows"));
-            String indexName = "flashlist";
-            String typeName = "BU";
-            JSONArray rows=(JSONArray)table.get("rows");
-            Iterator it = rows.iterator();
-            while (it.hasNext())
-            {
-              JSONObject row = (JSONObject)it.next();
-              //System.out.println(row);
-              String id = (String)row.get("instance");
-              try {
-                Date timestamp = this.dateFormat.parse((String)row.get("timestamp"));
-                bulkProcessor.add(
-                  Requests.indexRequest(indexName)
-                  .type(typeName)
-                  .id(id)
-                  .timestamp(String.valueOf(timestamp.getTime()))
-                  .source(row.toString())
-                );
-              }
-              catch (java.text.ParseException e) {
-                logger.error("Failed to parse timestamp "+row.get("timestamp"));
-              }
+            for (boolean firstLine = true;;firstLine = false) {
+              String line = reader.readLine();
+              if (line == null)
+                break;
+              if (firstLine)
+                continue;
+              slurpFlashList(line);
             }
           }
           catch (IOException e) {
-            logger.error("Error retrieving flash list from URL "+lasURL+": "+e.getMessage());
+            logger.error("Error retrieving catalog from LAS "+lasURN+": "+ExceptionUtils.getRootCauseMessage(e));
           }
-          catch (org.json.simple.parser.ParseException e) {
-            logger.error("Could not parse response from "+lasURL+": "+e.getMessage());
-          }
-
           Thread.sleep(10000);
         }
       }
       catch (java.lang.InterruptedException e)
       {}
+    }
+
+    private void slurpFlashList(String flashList) {
+      HttpURLConnection conn = null;
+      InputStream in = null;
+      URL url = null;
+      try {
+        url = new URL(lasURN+"/retrieveCollection?flash="+flashList+"&fmt=json");
+      }
+      catch (java.net.MalformedURLException e) {
+        logger.error("Bad LAS URL: "+ExceptionUtils.getStackTrace(e));
+        return;
+      }
+      JSONArray array;
+      try {
+        if (lasProxy == null) {
+          conn = (HttpURLConnection)url.openConnection();
+        }
+        else {
+          conn = (HttpURLConnection)url.openConnection(lasProxy);
+        }
+        in = conn.getInputStream();
+        InputStreamReader isr = new InputStreamReader(in);
+        BufferedReader reader = new BufferedReader(isr);
+        String rawJSON = reader.readLine();
+        JSONObject jsonObject = (JSONObject)this.parser.parse(rawJSON);
+        JSONObject table = (JSONObject)jsonObject.get("table");
+        //System.out.println(table.get("rows"));
+        String indexName = "flashlist";
+        String typeName = flashList.substring(flashList.lastIndexOf(':') + 1);
+        JSONArray rows=(JSONArray)table.get("rows");
+        Iterator it = rows.iterator();
+        while (it.hasNext())
+        {
+          JSONObject row = (JSONObject)it.next();
+          //System.out.println(row);
+          // Construct an ID which assures that all flashlist are unique
+          // but are overwritten with the next update
+          String id = (String)row.get("hostname");
+          if (id != null) {
+            Object geoslot = row.get("geoslot");
+            if (geoslot != null) {
+              id += "_"+geoslot.toString();
+              Object io = row.get("io");
+              if (io != null)
+                id += "_"+io.toString();
+            }
+          }
+          else {
+            for (String key : new String[] {"instance","srcId","partitionNumber","context","FMURL"}) {
+              Object k = row.get(key);
+              if (k != null) {
+                id = k.toString();
+                break;
+              }
+            }
+          }
+          if (id == null)
+            logger.error("No id constructed for "+typeName);
+          try {
+            Date timestamp = this.dateFormat.parse((String)row.get("timestamp"));
+            bulkProcessor.add(
+              Requests.indexRequest(indexName)
+              .type(typeName)
+              .id(id)
+              .timestamp(String.valueOf(timestamp.getTime()))
+              .source(row.toString())
+            );
+          }
+          catch (java.text.ParseException e) {
+            logger.error("Failed to parse timestamp "+row.get("timestamp"));
+          }
+        }
+      }
+      catch (IOException e) {
+        logger.error("Error retrieving flash list '"+flashList+"' from "+lasURN+": "+ExceptionUtils.getStackTrace(e));
+      }
+      catch (Exception e) {
+        logger.error("Could not parse flash list '"+flashList+"' from "+lasURN+": "+ExceptionUtils.getStackTrace(e));
+      }
       finally {
         try
         {
