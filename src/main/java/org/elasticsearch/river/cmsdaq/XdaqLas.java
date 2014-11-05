@@ -1,4 +1,4 @@
-package org.elasticsearch.river.xdaqlas;
+package org.elasticsearch.river.cmsdaq;
 
 import java.io.BufferedReader;
 import java.io.IOException;
