@@ -1,5 +1,5 @@
-river-xdaqlas
-=============
+river-cmsdaq
+============
 
 Playground for elastic search river to CMS DAQ
 
