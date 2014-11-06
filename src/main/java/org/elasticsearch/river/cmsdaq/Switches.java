@@ -155,7 +155,7 @@ public class Switches extends DaqRiver implements River {
             catch (java.io.IOException e)
             {}
           }
-          Thread.sleep(10000);
+          Thread.sleep(30000);
         }
       }
       catch (java.lang.InterruptedException e)
