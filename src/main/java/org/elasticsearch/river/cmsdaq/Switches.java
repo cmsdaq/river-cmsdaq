@@ -5,8 +5,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.Proxy;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.SocketAddress;
 import java.net.URL;
 import java.text.DateFormat;
@@ -17,20 +17,21 @@ import java.util.Map;
 
 import org.apache.commons.lang.exception.ExceptionUtils;
 
-import org.json.simple.JSONObject;
 import org.json.simple.JSONArray;
-import org.json.simple.parser.ParseException;
+import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.Requests;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
+import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.river.River;
 import org.elasticsearch.river.RiverName;
 import org.elasticsearch.river.RiverSettings;
-import org.elasticsearch.common.xcontent.support.XContentMapValues;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.util.concurrent.EsExecutors;
 
 
 public class Switches extends DaqRiver implements River {
@@ -50,7 +51,7 @@ public class Switches extends DaqRiver implements River {
   public void start() {
     logger.info("Start retrieving data from "+switchUrl);
     thread = EsExecutors.daemonThreadFactory(settings.globalSettings(), "switches_slurper").newThread(
-      new Slurper(switchUrl,this.lasProxy)
+      new Slurper(switchUrl,this.lasProxy,this.ttl)
     );
     thread.start();
   }
@@ -72,12 +73,14 @@ public class Switches extends DaqRiver implements River {
     private final Proxy proxy;
     private final JSONParser parser;
     private final DateFormat dateFormat;
+    private long ttl;
 
-    private Slurper(String switchUrl, Proxy proxy) {
+    private Slurper(String switchUrl, Proxy proxy, long ttl) {
       this.switchUrl = switchUrl;
       this.proxy = proxy;
       this.parser = new JSONParser();
       this.dateFormat = new SimpleDateFormat("E, dd MMM yyyy HH:mm:ss z");
+      this.ttl = ttl;
     }
 
     @Override
@@ -134,6 +137,7 @@ public class Switches extends DaqRiver implements River {
               .type(typeName)
               .id(id)
               .timestamp(timestamp)
+              .ttl(ttl)
               .source(row.toString())
               );
             }

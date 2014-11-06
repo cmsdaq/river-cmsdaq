@@ -25,6 +25,7 @@ public abstract class DaqRiver extends AbstractRiverComponent {
 
   protected final Proxy lasProxy;
   protected volatile BulkProcessor bulkProcessor;
+  protected final long ttl;
 
   @SuppressWarnings({"unchecked"})
   @Inject
@@ -32,6 +33,8 @@ public abstract class DaqRiver extends AbstractRiverComponent {
     super(riverName, settings);
 
     Map<String, Object> rSettings = settings.settings();
+
+    ttl = TimeValue.timeValueMinutes(XContentMapValues.nodeIntegerValue(rSettings.get("ttl"), 1)).millis();;
 
     // Create SOCKS proxy if requested
     final Boolean useProxy = XContentMapValues.nodeBooleanValue(rSettings.get("useProxyForLAS"),false);

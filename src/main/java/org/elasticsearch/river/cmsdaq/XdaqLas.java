@@ -5,8 +5,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.Proxy;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.SocketAddress;
 import java.net.URL;
 import java.text.DateFormat;
@@ -17,20 +17,21 @@ import java.util.Map;
 
 import org.apache.commons.lang.exception.ExceptionUtils;
 
-import org.json.simple.JSONObject;
 import org.json.simple.JSONArray;
-import org.json.simple.parser.ParseException;
+import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.Requests;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
+import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.river.River;
 import org.elasticsearch.river.RiverName;
 import org.elasticsearch.river.RiverSettings;
-import org.elasticsearch.common.xcontent.support.XContentMapValues;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.util.concurrent.EsExecutors;
 
 
 public class XdaqLas extends DaqRiver implements River {
@@ -51,7 +52,7 @@ public class XdaqLas extends DaqRiver implements River {
   public void start() {
     logger.info("Start retrieving data from "+lasURL);
     thread = EsExecutors.daemonThreadFactory(settings.globalSettings(), "las_slurper").newThread(
-      new Slurper(lasURL,this.lasProxy)
+      new Slurper(lasURL,this.lasProxy,this.ttl)
     );
     thread.start();
   }
@@ -73,12 +74,14 @@ public class XdaqLas extends DaqRiver implements River {
     private final Proxy lasProxy;
     private final JSONParser parser;
     private final DateFormat dateFormat;
+    private long ttl;
 
-    private Slurper(String lasURL, Proxy lasProxy) {
+    private Slurper(String lasURL, Proxy lasProxy, long ttl) {
       this.lasURN = lasURL+"/urn:xdaq-application:service=xmaslas2g";
       this.lasProxy = lasProxy;
       this.parser = new JSONParser();
       this.dateFormat = new SimpleDateFormat("E, MMM dd yyyy HH:mm:ss z");
+      this.ttl = ttl;
     }
 
     @Override
@@ -190,6 +193,7 @@ public class XdaqLas extends DaqRiver implements River {
               .type(typeName)
               .id(id)
               .timestamp(String.valueOf(timestamp.getTime()))
+              .ttl(ttl)
               .source(row.toString())
             );
           }
